@@ -56,7 +56,7 @@ void expand(const Cube &c, Hashy &hashes, XYZ shape, XYZ axisdiff, int diffsum) 
     }
     DEBUG_PRINTF("candidates: %lu\n\r", candidates.size());
     for (const auto &p : candidates) {
-        std::printf("(%2d %2d %2d)\n\r", p.x(), p.y(), p.z());
+        // std::printf("(%2d %2d %2d)\n\r", p.x(), p.y(), p.z());
         DEBUG_PRINTF("(%2d %2d %2d)\n\r", p.x(), p.y(), p.z());
         int ax = (p.x() < 0) ? 1 : 0;
         int ay = (p.y() < 0) ? 1 : 0;
@@ -162,7 +162,12 @@ Hashy gen(int n, int threads, bool use_cache, bool write_cache) {
                 if (abssum > 1 || diffx < 0 || diffy < 0 || diffz < 0) {
                     continue;
                 }
-
+                // handle symmetry cases
+                if (diffz == 1) {
+                    if (shape.z() == shape.y()) diffy = 1;
+                }
+                if (diffy == 1)
+                    if (shape.y() == shape.x()) diffx = 1;
                 std::printf("  shape %d %d %d\n\r", s.first.x(), s.first.y(), s.first.z());
                 for (const auto &subset : s.second.byhash)
                     for (const auto &b : subset.set) {
@@ -208,6 +213,7 @@ Hashy gen(int n, int threads, bool use_cache, bool write_cache) {
             }
         }
         std::printf("  num: %lu\n\r", hashes.byshape[targetShape].size());
+        std::printf("  num: %lu\n\r", hashes.byshape[XYZ(1, 1, 2)].size());
     }
     std::printf("  num cubes: %lu\n\r", hashes.size());
     if (write_cache) Cache::save("cubes_" + std::to_string(n) + ".bin", hashes, n);
