@@ -4,7 +4,7 @@ project(cubes)
 set(CMAKE_BUILD_TYPE "Release")
 set(CMAKE_CXX_FLAGS "-std=c++17")
 set(CMAKE_CXX_FLAGS_RELEASE "-march=native -O3 -Wall -Wextra")
-set(CMAKE_CXX_FLAGS_DEBUG "-march=native -O -Wall -Werror -Wextra -D DEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG "-march=native -Og -Wall -Wextra -g ")
 
 include_directories("include")
 include_directories("libraries")

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <mutex>
 #include <thread>
 
 #include "cache.hpp"
@@ -11,7 +12,6 @@
 #include "hashes.hpp"
 #include "results.hpp"
 #include "rotations.hpp"
-
 const int PERF_STEP = 500;
 
 void expand(const Cube &c, Hashy &hashes, XYZ shape, XYZ axisdiff, int diffsum) {
@@ -99,6 +99,52 @@ void expand(const Cube &c, Hashy &hashes, XYZ shape, XYZ axisdiff, int diffsum) 
     DEBUG_PRINTF("new hashes: %lu\n\r", hashes.size());
 }
 
+struct Workset {
+    std::mutex mu;
+    std::vector<Cube>::iterator b;
+    std::vector<Cube>::iterator e;
+    Hashy &hashes;
+    XYZ shape, expandDim;
+    int abssum;
+    Workset(std::vector<Cube> &data, Hashy &hashes, XYZ shape, XYZ expandDim, int abssum)
+        : b(data.begin()), e(data.end()), hashes(hashes), shape(shape), expandDim(expandDim), abssum(abssum) {}
+
+    struct Subset {
+        std::vector<Cube>::iterator b, e;
+        bool valid;
+        auto begin() { return b; }
+        auto end() { return e; }
+    };
+
+    Subset getPart() {
+        std::lock_guard<std::mutex> g(mu);
+        auto a = b;
+        b += 500;
+        if (b > e) b = e;
+        return {a, b, a < e};
+    }
+};
+
+struct Worker {
+    Workset &ws;
+    int id;
+    Worker(Workset &ws_, int id_) : ws(ws_), id(id_) {}
+    void run() {
+        // std::printf("start %d\n", id);
+        auto subset = ws.getPart();
+        while (subset.valid) {
+            // std::cout << id << " next subset " << &*subset.begin() << " to " << &*subset.end() << "\n";
+            for (auto &c : subset) {
+                // std::printf("%p\n", (void *)&c);
+                // c.print();
+                expand(c, ws.hashes, ws.shape, ws.expandDim, ws.abssum);
+            }
+            subset = ws.getPart();
+        }
+        // std::printf("finished %d\n", id);
+    }
+};
+#if 0
 void expandPart(std::vector<Cube> &base, Hashy &hashes, size_t start, size_t end) {
     auto t_start = std::chrono::steady_clock::now();
     auto t_last = t_start;
@@ -123,7 +169,7 @@ void expandPart(std::vector<Cube> &base, Hashy &hashes, size_t start, size_t end
     auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count();
     std::printf("  done took %.2f s [%7lu, %7lu]\033[0K\n\r", dt_ms / 1000.f, start, end);
 }
-
+#endif
 Hashy gen(int n, int threads, bool use_cache, bool write_cache) {
     Hashy hashes;
     if (n < 1)
@@ -145,6 +191,7 @@ Hashy gen(int n, int threads, bool use_cache, bool write_cache) {
     std::printf("N = %d || generating new cubes from %lu base cubes.\n\r", n, base.size());
     hashes.init(n);
     int count = 0;
+    uint64_t totalSum = 0;
     for (auto &tup : hashes.byshape) {
         XYZ targetShape = tup.first;
         std::printf("process output shape [%2d %2d %2d]\n\r", targetShape.x(), targetShape.y(), targetShape.z());
@@ -191,34 +238,60 @@ Hashy gen(int n, int threads, bool use_cache, bool write_cache) {
             auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
             std::printf("  took %.2f s\033[0K\n\r", dt_ms / 1000.f);
         } else {
-            std::vector<Cube> baseCubes;
-            std::printf("converting to vector\n\r");
-            for (auto &s : base.byshape)
+            for (auto &s : base.byshape) {
+                auto &shape = s.first;
+                int diffx = targetShape.x() - shape.x();
+                int diffy = targetShape.y() - shape.y();
+                int diffz = targetShape.z() - shape.z();
+                int abssum = abs(diffx) + abs(diffy) + abs(diffz);
+                if (abssum > 1 || diffx < 0 || diffy < 0 || diffz < 0) {
+                    continue;
+                }
+                std::vector<Cube> baseCubes;
+                // handle symmetry cases
+                if (diffz == 1) {
+                    if (shape.z() == shape.y()) diffy = 1;
+                }
+                if (diffy == 1)
+                    if (shape.y() == shape.x()) diffx = 1;
+                // std::printf("converting to vector\n\r");
+                std::printf("  shape %d %d %d\n\r", s.first.x(), s.first.y(), s.first.z());
                 for (auto &subset : s.second.byhash) {
                     baseCubes.insert(baseCubes.end(), subset.set.begin(), subset.set.end());
-                    subset.set.clear();
-                    subset.set.reserve(1);
+                    // subset.set.clear();
+                    // subset.set.reserve(1);
                 }
-            std::printf("starting %d threads\n\r", threads);
-            std::vector<std::thread> ts;
-            ts.reserve(threads);
-            for (int i = 0; i < threads; ++i) {
-                auto start = baseCubes.size() * i / threads;
-                auto end = baseCubes.size() * (i + 1) / threads;
-
-                ts.emplace_back(expandPart, std::ref(baseCubes), std::ref(hashes), start, end);
-            }
-            for (int i = 0; i < threads; ++i) {
-                ts[i].join();
+                // std::cout << baseCubes.size() << " -- " << &*baseCubes.begin() << " to " << &*baseCubes.end() << "\n";
+                // std::printf("starting %d threads\n\r", threads);
+                std::vector<std::thread> ts;
+                Workset ws(baseCubes, hashes, shape, XYZ(diffx, diffy, diffz), abssum);
+                std::vector<Worker> workers;
+                ts.reserve(threads);
+                workers.reserve(threads);
+                for (int i = 0; i < threads; ++i) {
+                    workers.emplace_back(ws, i);
+                    ts.emplace_back(&Worker::run, std::ref(workers[i]));
+                }
+                for (int i = 0; i < threads; ++i) {
+                    ts[i].join();
+                }
             }
         }
         std::printf("  num: %lu\n\r", hashes.byshape[targetShape].size());
-        std::printf("  num: %lu\n\r", hashes.byshape[XYZ(1, 1, 2)].size());
+        totalSum += hashes.byshape[targetShape].size();
+        if (write_cache)
+            Cache::save("cubes_" + std::to_string(n) + "_" + std::to_string(targetShape.x()) + "-" + std::to_string(targetShape.y()) + "-" +
+                            std::to_string(targetShape.z()) + ".bin",
+                        hashes, n);
+
+        for (auto &subset : hashes.byshape[targetShape].byhash) {
+            subset.set.clear();
+            subset.set.reserve(1);
+        }
     }
-    std::printf("  num cubes: %lu\n\r", hashes.size());
-    if (write_cache) Cache::save("cubes_" + std::to_string(n) + ".bin", hashes, n);
+    std::printf("  num cubes: %lu\n\r", totalSum);
     if (sizeof(results) / sizeof(results[0]) > ((uint64_t)(n - 1)) && n > 1) {
-        if (results[n - 1] != hashes.size()) {
+        if (results[n - 1] != totalSum) {
             std::printf("ERROR: result does not equal resultstable (%lu)!\n\r", results[n - 1]);
             std::exit(-1);
         }
