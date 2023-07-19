@@ -154,6 +154,7 @@ struct Worker {
 };
 
 Hashy gen(int n, int threads, bool use_cache, bool write_cache, bool split_cache) {
+    (void)use_cache;
     Hashy hashes;
     if (n < 1)
         return {};
@@ -216,7 +217,8 @@ Hashy gen(int n, int threads, bool use_cache, bool write_cache, bool split_cache
             Cache::save("cubes_" + std::to_string(n) + "_" + std::to_string(targetShape.x()) + "-" + std::to_string(targetShape.y()) + "-" +
                             std::to_string(targetShape.z()) + ".bin",
                         hashes, n);
-
+        }
+        if (split_cache) {
             for (auto &subset : hashes.byshape[targetShape].byhash) {
                 subset.set.clear();
                 subset.set.reserve(1);
