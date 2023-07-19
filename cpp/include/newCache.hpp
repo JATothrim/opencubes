@@ -22,7 +22,7 @@ struct CubeView {
         return ret;
     }
 };
-
+class Workset;
 struct CubeIterator {
     using iterator_category = std::forward_iterator_tag;
     using difference_type = std::ptrdiff_t;
@@ -62,6 +62,7 @@ struct CubeIterator {
     friend bool operator<(const CubeIterator& a, const CubeIterator& b) { return a.m_ptr < b.m_ptr; };
     friend bool operator>(const CubeIterator& a, const CubeIterator& b) { return a.m_ptr > b.m_ptr; };
     friend bool operator!=(const CubeIterator& a, const CubeIterator& b) { return a.m_ptr != b.m_ptr; };
+    friend class Workset;
 
    private:
     uint32_t n;

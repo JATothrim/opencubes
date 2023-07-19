@@ -103,27 +103,29 @@ void expand(const Cube &c, Hashy &hashes, XYZ shape, XYZ axisdiff, int diffsum) 
 
 struct Workset {
     std::mutex mu;
-    CubeIterator b;
-    CubeIterator e;
+    CubeIterator _begin_total;
+    CubeIterator _begin;
+    CubeIterator _end;
     Hashy &hashes;
     XYZ shape, expandDim;
     int abssum;
     Workset(ShapeRange &data, Hashy &hashes, XYZ shape, XYZ expandDim, int abssum)
-        : b(data.begin()), e(data.end()), hashes(hashes), shape(shape), expandDim(expandDim), abssum(abssum) {}
+        : _begin_total(data.begin()), _begin(data.begin()), _end(data.end()), hashes(hashes), shape(shape), expandDim(expandDim), abssum(abssum) {}
 
     struct Subset {
-        CubeIterator b, e;
+        CubeIterator _begin, _end;
         bool valid;
-        auto begin() { return b; }
-        auto end() { return e; }
+        float percent;
+        auto begin() { return _begin; }
+        auto end() { return _end; }
     };
 
     Subset getPart() {
         std::lock_guard<std::mutex> g(mu);
-        auto a = b;
-        b += 500;
-        if (b > e) b = e;
-        return {a, b, a < e};
+        auto a = _begin;
+        _begin += 500;
+        if (_begin > _end) _begin = _end;
+        return {a, _begin, a < _end, 100 * (float)((uint64_t)a.m_ptr - (uint64_t)_begin_total.m_ptr) / ((uint64_t)_end.m_ptr - (uint64_t)_begin_total.m_ptr)};
     }
 };
 
@@ -135,6 +137,10 @@ struct Worker {
         // std::printf("start %d\n", id);
         auto subset = ws.getPart();
         while (subset.valid) {
+            if (id == 0) {
+                std::printf("  %5.2f%%\r", subset.percent);
+                std::flush(std::cout);
+            }
             // std::cout << id << " next subset " << &*subset.begin() << " to " << &*subset.end() << "\n";
             for (auto &c : subset) {
                 // std::printf("%p\n", (void *)&c);
