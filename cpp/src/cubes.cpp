@@ -194,10 +194,8 @@ Hashy gen(int n, int threads, bool use_cache, bool write_cache, bool split_cache
             }
             if (diffy == 1)
                 if (shape.y() == shape.x()) diffx = 1;
-            // std::printf("converting to vector\n\r");
-            std::printf("  shape %d %d %d\n\r", shape.x(), shape.y(), shape.z());
 
-            // std::cout << baseCubes.size() << " -- " << &*baseCubes.begin() << " to " << &*baseCubes.end() << "\n";
+            std::printf("  shape %d %d %d\n\r", shape.x(), shape.y(), shape.z());
             // std::printf("starting %d threads\n\r", threads);
             std::vector<std::thread> ts;
             Workset ws(s, hashes, shape, XYZ(diffx, diffy, diffz), abssum);
