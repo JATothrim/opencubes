@@ -10,8 +10,10 @@
 #include "cache.hpp"
 #include "cube.hpp"
 #include "hashes.hpp"
+#include "newCache.hpp"
 #include "results.hpp"
 #include "rotations.hpp"
+
 const int PERF_STEP = 500;
 
 void expand(const Cube &c, Hashy &hashes, XYZ shape, XYZ axisdiff, int diffsum) {
@@ -101,16 +103,16 @@ void expand(const Cube &c, Hashy &hashes, XYZ shape, XYZ axisdiff, int diffsum) 
 
 struct Workset {
     std::mutex mu;
-    std::vector<Cube>::iterator b;
-    std::vector<Cube>::iterator e;
+    CubeIterator b;
+    CubeIterator e;
     Hashy &hashes;
     XYZ shape, expandDim;
     int abssum;
-    Workset(std::vector<Cube> &data, Hashy &hashes, XYZ shape, XYZ expandDim, int abssum)
+    Workset(ShapeRange &data, Hashy &hashes, XYZ shape, XYZ expandDim, int abssum)
         : b(data.begin()), e(data.end()), hashes(hashes), shape(shape), expandDim(expandDim), abssum(abssum) {}
 
     struct Subset {
-        std::vector<Cube>::iterator b, e;
+        CubeIterator b, e;
         bool valid;
         auto begin() { return b; }
         auto end() { return e; }
@@ -144,33 +146,8 @@ struct Worker {
         // std::printf("finished %d\n", id);
     }
 };
-#if 0
-void expandPart(std::vector<Cube> &base, Hashy &hashes, size_t start, size_t end) {
-    auto t_start = std::chrono::steady_clock::now();
-    auto t_last = t_start;
-    auto total = end - start;
-    for (auto i = start; i < end; ++i) {
-        // expand(base[i], hashes);
-        auto count = i - start;
-        if (start == 0 && (count % PERF_STEP == (PERF_STEP - 1))) {
-            auto t_end = std::chrono::steady_clock::now();
-            auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count();
-            auto dt_us = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_last).count();
-            t_last = t_end;
-            auto perc = 100 * count / total;
-            auto avg = 1000000.f * count / total_us;
-            auto its = 1000000.f * PERF_STEP / dt_us;
-            auto remaining = (end - i) / avg;
-            std::printf(" %3ld%%, %5.0f avg baseCubes/s, %5.0f baseCubes/s, remaining: %.0fs\033[0K\r", perc, avg, its, remaining);
-            std::flush(std::cout);
-        }
-    }
-    auto t_end = std::chrono::steady_clock::now();
-    auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count();
-    std::printf("  done took %.2f s [%7lu, %7lu]\033[0K\n\r", dt_ms / 1000.f, start, end);
-}
-#endif
-Hashy gen(int n, int threads, bool use_cache, bool write_cache) {
+
+Hashy gen(int n, int threads, bool use_cache, bool write_cache, bool split_cache) {
     Hashy hashes;
     if (n < 1)
         return {};
@@ -181,120 +158,74 @@ Hashy gen(int n, int threads, bool use_cache, bool write_cache) {
         return hashes;
     }
 
-    if (use_cache) {
-        hashes = Cache::load("cubes_" + std::to_string(n) + ".bin");
+    std::string cachefile = "cubes_" + std::to_string(n - 1) + ".bin";
+    CacheReader cr(cachefile);
+    cr.printHeader();
 
-        if (hashes.size() != 0) return hashes;
-    }
-
-    auto base = gen(n - 1, threads, use_cache, write_cache);
-    std::printf("N = %d || generating new cubes from %lu base cubes.\n\r", n, base.size());
+    std::printf("N = %d || generating new cubes from %lu base cubes.\n\r", n, cr.size());
     hashes.init(n);
-    int count = 0;
     uint64_t totalSum = 0;
+    auto start = std::chrono::steady_clock::now();
+    uint32_t totalOutputShapes = hashes.byshape.size();
+    uint32_t outShapeCount = 0;
     for (auto &tup : hashes.byshape) {
+        outShapeCount++;
         XYZ targetShape = tup.first;
-        std::printf("process output shape [%2d %2d %2d]\n\r", targetShape.x(), targetShape.y(), targetShape.z());
-        if (threads == 1 || base.size() < 100) {
-            auto start = std::chrono::steady_clock::now();
-            auto last = start;
-            int total = base.size();
-
-            for (const auto &s : base.byshape) {
-                auto &shape = s.first;
-                int diffx = targetShape.x() - shape.x();
-                int diffy = targetShape.y() - shape.y();
-                int diffz = targetShape.z() - shape.z();
-                int abssum = abs(diffx) + abs(diffy) + abs(diffz);
-                if (abssum > 1 || diffx < 0 || diffy < 0 || diffz < 0) {
-                    continue;
-                }
-                // handle symmetry cases
-                if (diffz == 1) {
-                    if (shape.z() == shape.y()) diffy = 1;
-                }
-                if (diffy == 1)
-                    if (shape.y() == shape.x()) diffx = 1;
-                std::printf("  shape %d %d %d\n\r", s.first.x(), s.first.y(), s.first.z());
-                for (const auto &subset : s.second.byhash)
-                    for (const auto &b : subset.set) {
-                        expand(b, hashes, shape, XYZ(diffx, diffy, diffz), abssum);
-                        count++;
-                        if (count % PERF_STEP == (PERF_STEP - 1)) {
-                            auto end = std::chrono::steady_clock::now();
-                            auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-                            auto dt_us = std::chrono::duration_cast<std::chrono::microseconds>(end - last).count();
-                            last = end;
-                            auto perc = 100 * count / total;
-                            auto avg = 1000000.f * count / total_us;
-                            auto its = 1000000.f * PERF_STEP / dt_us;
-                            auto remaining = (total - count) / avg;
-                            std::printf(" %3d%%, %5.0f avg baseCubes/s, %5.0f baseCubes/s, remaining: %.0fs\033[0K\r", perc, avg, its, remaining);
-                            std::flush(std::cout);
-                        }
-                    }
+        std::printf("process output shape %3d/%d [%2d %2d %2d]\n\r", outShapeCount, totalOutputShapes, targetShape.x(), targetShape.y(), targetShape.z());
+        for (uint32_t sid = 0; sid < cr.numShapes(); ++sid) {
+            auto s = cr.getCubesByShape(sid);
+            auto &shape = s.shape;
+            int diffx = targetShape.x() - shape.x();
+            int diffy = targetShape.y() - shape.y();
+            int diffz = targetShape.z() - shape.z();
+            int abssum = abs(diffx) + abs(diffy) + abs(diffz);
+            if (abssum > 1 || diffx < 0 || diffy < 0 || diffz < 0) {
+                continue;
             }
-            auto end = std::chrono::steady_clock::now();
-            auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-            std::printf("  took %.2f s\033[0K\n\r", dt_ms / 1000.f);
-        } else {
-            for (auto &s : base.byshape) {
-                auto &shape = s.first;
-                int diffx = targetShape.x() - shape.x();
-                int diffy = targetShape.y() - shape.y();
-                int diffz = targetShape.z() - shape.z();
-                int abssum = abs(diffx) + abs(diffy) + abs(diffz);
-                if (abssum > 1 || diffx < 0 || diffy < 0 || diffz < 0) {
-                    continue;
-                }
-                std::vector<Cube> baseCubes;
-                // handle symmetry cases
-                if (diffz == 1) {
-                    if (shape.z() == shape.y()) diffy = 1;
-                }
-                if (diffy == 1)
-                    if (shape.y() == shape.x()) diffx = 1;
-                // std::printf("converting to vector\n\r");
-                std::printf("  shape %d %d %d\n\r", s.first.x(), s.first.y(), s.first.z());
-                for (auto &subset : s.second.byhash) {
-                    baseCubes.insert(baseCubes.end(), subset.set.begin(), subset.set.end());
-                    // subset.set.clear();
-                    // subset.set.reserve(1);
-                }
-                // std::cout << baseCubes.size() << " -- " << &*baseCubes.begin() << " to " << &*baseCubes.end() << "\n";
-                // std::printf("starting %d threads\n\r", threads);
-                std::vector<std::thread> ts;
-                Workset ws(baseCubes, hashes, shape, XYZ(diffx, diffy, diffz), abssum);
-                std::vector<Worker> workers;
-                ts.reserve(threads);
-                workers.reserve(threads);
-                for (int i = 0; i < threads; ++i) {
-                    workers.emplace_back(ws, i);
-                    ts.emplace_back(&Worker::run, std::ref(workers[i]));
-                }
-                for (int i = 0; i < threads; ++i) {
-                    ts[i].join();
-                }
+            // handle symmetry cases
+            if (diffz == 1) {
+                if (shape.z() == shape.y()) diffy = 1;
+            }
+            if (diffy == 1)
+                if (shape.y() == shape.x()) diffx = 1;
+            // std::printf("converting to vector\n\r");
+            std::printf("  shape %d %d %d\n\r", shape.x(), shape.y(), shape.z());
+
+            // std::cout << baseCubes.size() << " -- " << &*baseCubes.begin() << " to " << &*baseCubes.end() << "\n";
+            // std::printf("starting %d threads\n\r", threads);
+            std::vector<std::thread> ts;
+            Workset ws(s, hashes, shape, XYZ(diffx, diffy, diffz), abssum);
+            std::vector<Worker> workers;
+            ts.reserve(threads);
+            workers.reserve(threads);
+            for (int i = 0; i < threads; ++i) {
+                workers.emplace_back(ws, i);
+                ts.emplace_back(&Worker::run, std::ref(workers[i]));
+            }
+            for (int i = 0; i < threads; ++i) {
+                ts[i].join();
             }
         }
         std::printf("  num: %lu\n\r", hashes.byshape[targetShape].size());
         totalSum += hashes.byshape[targetShape].size();
-        if (write_cache)
+        if (write_cache && split_cache) {
             Cache::save("cubes_" + std::to_string(n) + "_" + std::to_string(targetShape.x()) + "-" + std::to_string(targetShape.y()) + "-" +
                             std::to_string(targetShape.z()) + ".bin",
                         hashes, n);
 
-        for (auto &subset : hashes.byshape[targetShape].byhash) {
-            subset.set.clear();
-            subset.set.reserve(1);
+            for (auto &subset : hashes.byshape[targetShape].byhash) {
+                subset.set.clear();
+                subset.set.reserve(1);
+            }
         }
     }
-    std::printf("  num cubes: %lu\n\r", totalSum);
-    if (sizeof(results) / sizeof(results[0]) > ((uint64_t)(n - 1)) && n > 1) {
-        if (results[n - 1] != totalSum) {
-            std::printf("ERROR: result does not equal resultstable (%lu)!\n\r", results[n - 1]);
-            std::exit(-1);
-        }
+    if (write_cache && !split_cache) {
+        Cache::save("cubes_" + std::to_string(n) + ".bin", hashes, n);
     }
+    auto end = std::chrono::steady_clock::now();
+    auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    std::printf("took %.2f s\033[0K\n\r", dt_ms / 1000.f);
+    std::printf("num total cubes: %lu\n\r", totalSum);
+    checkResult(n, totalSum);
     return hashes;
 }
