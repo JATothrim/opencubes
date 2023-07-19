@@ -22,10 +22,17 @@ struct Workset {
     CubeIterator _begin;
     CubeIterator _end;
     Hashy &hashes;
-    XYZ shape, expandDim;
+    XYZ targetShape, shape, expandDim;
     bool notSameShape;
-    Workset(ShapeRange &data, Hashy &hashes, XYZ shape, XYZ expandDim, bool notSameShape)
-        : _begin_total(data.begin()), _begin(data.begin()), _end(data.end()), hashes(hashes), shape(shape), expandDim(expandDim), notSameShape(notSameShape) {}
+    Workset(ShapeRange &data, Hashy &hashes, XYZ targetShape, XYZ shape, XYZ expandDim, bool notSameShape)
+        : _begin_total(data.begin())
+        , _begin(data.begin())
+        , _end(data.end())
+        , hashes(hashes)
+        , targetShape(targetShape)
+        , shape(shape)
+        , expandDim(expandDim)
+        , notSameShape(notSameShape) {}
 
     struct Subset {
         CubeIterator _begin, _end;
@@ -193,7 +200,7 @@ Hashy gen(int n, int threads, bool use_cache, bool write_cache, bool split_cache
             std::printf("  shape %d %d %d\n\r", shape.x(), shape.y(), shape.z());
             // std::printf("starting %d threads\n\r", threads);
             std::vector<std::thread> ts;
-            Workset ws(s, hashes, shape, XYZ(diffx, diffy, diffz), abssum);
+            Workset ws(s, hashes, targetShape, shape, XYZ(diffx, diffy, diffz), abssum);
             std::vector<Worker> workers;
             ts.reserve(threads);
             workers.reserve(threads);
