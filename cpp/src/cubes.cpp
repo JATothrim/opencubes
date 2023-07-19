@@ -51,36 +51,41 @@ struct Workset {
     }
 
     void expand(const Cube &c) {
-        XYZSet candidates;
+        std::vector<XYZ> candidates, tmp;
         candidates.reserve(c.size() * 6);
+
         if (notSameShape) {
             for (const auto &p : c) {
                 if (expandDim.x() == 1) {
-                    if (p.x() == shape.x()) candidates.emplace(XYZ(p.x() + 1, p.y(), p.z()));
-                    if (p.x() == 0) candidates.emplace(XYZ(p.x() - 1, p.y(), p.z()));
+                    if (p.x() == shape.x()) candidates.emplace_back(XYZ(p.x() + 1, p.y(), p.z()));
+                    if (p.x() == 0) candidates.emplace_back(XYZ(p.x() - 1, p.y(), p.z()));
                 }
                 if (expandDim.y() == 1) {
-                    if (p.y() == shape.y()) candidates.emplace(XYZ(p.x(), p.y() + 1, p.z()));
-                    if (p.y() == 0) candidates.emplace(XYZ(p.x(), p.y() - 1, p.z()));
+                    if (p.y() == shape.y()) candidates.emplace_back(XYZ(p.x(), p.y() + 1, p.z()));
+                    if (p.y() == 0) candidates.emplace_back(XYZ(p.x(), p.y() - 1, p.z()));
                 }
                 if (expandDim.z() == 1) {
-                    if (p.z() == shape.z()) candidates.emplace(XYZ(p.x(), p.y(), p.z() + 1));
-                    if (p.z() == 0) candidates.emplace(XYZ(p.x(), p.y(), p.z() - 1));
+                    if (p.z() == shape.z()) candidates.emplace_back(XYZ(p.x(), p.y(), p.z() + 1));
+                    if (p.z() == 0) candidates.emplace_back(XYZ(p.x(), p.y(), p.z() - 1));
                 }
             }
         } else {
             for (const auto &p : c) {
-                if (p.x() < shape.x()) candidates.emplace(XYZ(p.x() + 1, p.y(), p.z()));
-                if (p.x() > 0) candidates.emplace(XYZ(p.x() - 1, p.y(), p.z()));
-                if (p.y() < shape.y()) candidates.emplace(XYZ(p.x(), p.y() + 1, p.z()));
-                if (p.y() > 0) candidates.emplace(XYZ(p.x(), p.y() - 1, p.z()));
-                if (p.z() < shape.z()) candidates.emplace(XYZ(p.x(), p.y(), p.z() + 1));
-                if (p.z() > 0) candidates.emplace(XYZ(p.x(), p.y(), p.z() - 1));
+                if (p.x() < shape.x()) candidates.emplace_back(XYZ(p.x() + 1, p.y(), p.z()));
+                if (p.x() > 0) candidates.emplace_back(XYZ(p.x() - 1, p.y(), p.z()));
+                if (p.y() < shape.y()) candidates.emplace_back(XYZ(p.x(), p.y() + 1, p.z()));
+                if (p.y() > 0) candidates.emplace_back(XYZ(p.x(), p.y() - 1, p.z()));
+                if (p.z() < shape.z()) candidates.emplace_back(XYZ(p.x(), p.y(), p.z() + 1));
+                if (p.z() > 0) candidates.emplace_back(XYZ(p.x(), p.y(), p.z() - 1));
             }
         }
-        for (const auto &p : c) {
-            candidates.erase(p);
-        }
+        std::sort(candidates.begin(), candidates.end());
+        auto end = std::unique(candidates.begin(), candidates.end());
+        // Copy XYZ not in Cube into tmp
+        tmp.reserve(std::distance(candidates.begin(), end));
+        std::set_difference(candidates.begin(), end, c.begin(), c.end(), std::back_inserter(tmp));
+        candidates = std::move(tmp);
+
         DEBUG_PRINTF("candidates: %lu\n\r", candidates.size());
 
         Cube newCube(c.size() + 1);
@@ -88,7 +93,6 @@ struct Workset {
         Cube rotatedCube(newCube.size());
 
         for (const auto &p : candidates) {
-            // std::printf("(%2d %2d %2d)\n\r", p.x(), p.y(), p.z());
             DEBUG_PRINTF("(%2d %2d %2d)\n\r", p.x(), p.y(), p.z());
             int ax = (p.x() < 0) ? 1 : 0;
             int ay = (p.y() < 0) ? 1 : 0;
@@ -105,8 +109,6 @@ struct Workset {
                 if (nz > shape[2]) shape[2] = nz;
                 *put++ = XYZ(nx, ny, nz);
             }
-            DEBUG_PRINTF("shape %2d %2d %2d\n\r", shape[0], shape[1], shape[2]);
-
             // check rotations
             XYZ lowestShape;
             bool none_set = true;
@@ -124,9 +126,7 @@ struct Workset {
                 }
             }
             hashes.insert(lowestHashCube, lowestShape);
-            DEBUG_PRINTF("inserted! (num %2lu)\n\n\r", hashes.size());
         }
-        DEBUG_PRINTF("new hashes: %lu\n\r", hashes.size());
     }
 };
 

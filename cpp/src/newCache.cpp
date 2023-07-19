@@ -9,7 +9,7 @@
 CacheReader::CacheReader(const std::string& path)
     : path_(path), fileDescriptor_(0), fileSize_(0), fileLoaded_(false), dummyHeader{0, 0, 0, 0}, header(&dummyHeader), shapes(0) {
     if (loadFile(path) != 0) {
-        std::cerr << "failed to load data" << std::endl;
+        std::cerr << "failed to load data from \"" << path << "\"" << std::endl;
     }
 }
 void CacheReader::printHeader() {
