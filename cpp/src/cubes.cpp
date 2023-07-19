@@ -16,94 +16,6 @@
 
 const int PERF_STEP = 500;
 
-void expand(const Cube &c, Hashy &hashes, XYZ shape, XYZ axisdiff, int diffsum) {
-    XYZSet candidates;
-    candidates.reserve(c.size() * 6);
-    if (0) {
-        for (const auto &p : c) {
-            candidates.emplace(XYZ(p.x() + 1, p.y(), p.z()));
-            candidates.emplace(XYZ(p.x() - 1, p.y(), p.z()));
-            candidates.emplace(XYZ(p.x(), p.y() + 1, p.z()));
-            candidates.emplace(XYZ(p.x(), p.y() - 1, p.z()));
-            candidates.emplace(XYZ(p.x(), p.y(), p.z() + 1));
-            candidates.emplace(XYZ(p.x(), p.y(), p.z() - 1));
-        }
-    } else if (diffsum == 1) {
-        for (const auto &p : c) {
-            if (axisdiff.x() == 1) {
-                if (p.x() == shape.x()) candidates.emplace(XYZ(p.x() + 1, p.y(), p.z()));
-                if (p.x() == 0) candidates.emplace(XYZ(p.x() - 1, p.y(), p.z()));
-            }
-            if (axisdiff.y() == 1) {
-                if (p.y() == shape.y()) candidates.emplace(XYZ(p.x(), p.y() + 1, p.z()));
-                if (p.y() == 0) candidates.emplace(XYZ(p.x(), p.y() - 1, p.z()));
-            }
-            if (axisdiff.z() == 1) {
-                if (p.z() == shape.z()) candidates.emplace(XYZ(p.x(), p.y(), p.z() + 1));
-                if (p.z() == 0) candidates.emplace(XYZ(p.x(), p.y(), p.z() - 1));
-            }
-        }
-    } else {
-        for (const auto &p : c) {
-            if (p.x() < shape.x()) candidates.emplace(XYZ(p.x() + 1, p.y(), p.z()));
-            if (p.x() > 0) candidates.emplace(XYZ(p.x() - 1, p.y(), p.z()));
-            if (p.y() < shape.y()) candidates.emplace(XYZ(p.x(), p.y() + 1, p.z()));
-            if (p.y() > 0) candidates.emplace(XYZ(p.x(), p.y() - 1, p.z()));
-            if (p.z() < shape.z()) candidates.emplace(XYZ(p.x(), p.y(), p.z() + 1));
-            if (p.z() > 0) candidates.emplace(XYZ(p.x(), p.y(), p.z() - 1));
-        }
-    }
-    for (const auto &p : c) {
-        candidates.erase(p);
-    }
-    DEBUG_PRINTF("candidates: %lu\n\r", candidates.size());
-
-    Cube newCube(c.size() + 1);
-    Cube lowestHashCube(newCube.size());
-    Cube rotatedCube(newCube.size());
-
-    for (const auto &p : candidates) {
-        // std::printf("(%2d %2d %2d)\n\r", p.x(), p.y(), p.z());
-        DEBUG_PRINTF("(%2d %2d %2d)\n\r", p.x(), p.y(), p.z());
-        int ax = (p.x() < 0) ? 1 : 0;
-        int ay = (p.y() < 0) ? 1 : 0;
-        int az = (p.z() < 0) ? 1 : 0;
-        auto put = newCube.begin();
-        *put++ = XYZ(p.x() + ax, p.y() + ay, p.z() + az);
-        XYZ shape(p.x() + ax, p.y() + ay, p.z() + az);
-        for (const auto &np : c) {
-            auto nx = np.x() + ax;
-            auto ny = np.y() + ay;
-            auto nz = np.z() + az;
-            if (nx > shape[0]) shape[0] = nx;
-            if (ny > shape[1]) shape[1] = ny;
-            if (nz > shape[2]) shape[2] = nz;
-            *put++ = XYZ(nx, ny, nz);
-        }
-        DEBUG_PRINTF("shape %2d %2d %2d\n\r", shape[0], shape[1], shape[2]);
-
-        // check rotations
-        XYZ lowestShape;
-        bool none_set = true;
-        for (int i = 0; i < 24; ++i) {
-            auto [res, ok] = Rotations::rotate(i, shape, newCube, rotatedCube);
-            if (!ok) continue;  // rotation generated violating shape
-
-            std::sort(rotatedCube.begin(), rotatedCube.end());
-
-            if (none_set || lowestHashCube < rotatedCube) {
-                none_set = false;
-                // std::printf("shape %2d %2d %2d\n\r", res.first.x(), res.first.y(), res.first.z());
-                swap(lowestHashCube, rotatedCube);
-                lowestShape = res;
-            }
-        }
-        hashes.insert(lowestHashCube, lowestShape);
-        DEBUG_PRINTF("inserted! (num %2lu)\n\n\r", hashes.size());
-    }
-    DEBUG_PRINTF("new hashes: %lu\n\r", hashes.size());
-}
-
 struct Workset {
     std::mutex mu;
     CubeIterator _begin_total;
@@ -111,9 +23,9 @@ struct Workset {
     CubeIterator _end;
     Hashy &hashes;
     XYZ shape, expandDim;
-    int abssum;
-    Workset(ShapeRange &data, Hashy &hashes, XYZ shape, XYZ expandDim, int abssum)
-        : _begin_total(data.begin()), _begin(data.begin()), _end(data.end()), hashes(hashes), shape(shape), expandDim(expandDim), abssum(abssum) {}
+    bool notSameShape;
+    Workset(ShapeRange &data, Hashy &hashes, XYZ shape, XYZ expandDim, bool notSameShape)
+        : _begin_total(data.begin()), _begin(data.begin()), _end(data.end()), hashes(hashes), shape(shape), expandDim(expandDim), notSameShape(notSameShape) {}
 
     struct Subset {
         CubeIterator _begin, _end;
@@ -129,6 +41,85 @@ struct Workset {
         _begin += 500;
         if (_begin > _end) _begin = _end;
         return {a, _begin, a < _end, 100 * (float)((uint64_t)a.m_ptr - (uint64_t)_begin_total.m_ptr) / ((uint64_t)_end.m_ptr - (uint64_t)_begin_total.m_ptr)};
+    }
+
+    void expand(const Cube &c) {
+        XYZSet candidates;
+        candidates.reserve(c.size() * 6);
+        if (notSameShape) {
+            for (const auto &p : c) {
+                if (expandDim.x() == 1) {
+                    if (p.x() == shape.x()) candidates.emplace(XYZ(p.x() + 1, p.y(), p.z()));
+                    if (p.x() == 0) candidates.emplace(XYZ(p.x() - 1, p.y(), p.z()));
+                }
+                if (expandDim.y() == 1) {
+                    if (p.y() == shape.y()) candidates.emplace(XYZ(p.x(), p.y() + 1, p.z()));
+                    if (p.y() == 0) candidates.emplace(XYZ(p.x(), p.y() - 1, p.z()));
+                }
+                if (expandDim.z() == 1) {
+                    if (p.z() == shape.z()) candidates.emplace(XYZ(p.x(), p.y(), p.z() + 1));
+                    if (p.z() == 0) candidates.emplace(XYZ(p.x(), p.y(), p.z() - 1));
+                }
+            }
+        } else {
+            for (const auto &p : c) {
+                if (p.x() < shape.x()) candidates.emplace(XYZ(p.x() + 1, p.y(), p.z()));
+                if (p.x() > 0) candidates.emplace(XYZ(p.x() - 1, p.y(), p.z()));
+                if (p.y() < shape.y()) candidates.emplace(XYZ(p.x(), p.y() + 1, p.z()));
+                if (p.y() > 0) candidates.emplace(XYZ(p.x(), p.y() - 1, p.z()));
+                if (p.z() < shape.z()) candidates.emplace(XYZ(p.x(), p.y(), p.z() + 1));
+                if (p.z() > 0) candidates.emplace(XYZ(p.x(), p.y(), p.z() - 1));
+            }
+        }
+        for (const auto &p : c) {
+            candidates.erase(p);
+        }
+        DEBUG_PRINTF("candidates: %lu\n\r", candidates.size());
+
+        Cube newCube(c.size() + 1);
+        Cube lowestHashCube(newCube.size());
+        Cube rotatedCube(newCube.size());
+
+        for (const auto &p : candidates) {
+            // std::printf("(%2d %2d %2d)\n\r", p.x(), p.y(), p.z());
+            DEBUG_PRINTF("(%2d %2d %2d)\n\r", p.x(), p.y(), p.z());
+            int ax = (p.x() < 0) ? 1 : 0;
+            int ay = (p.y() < 0) ? 1 : 0;
+            int az = (p.z() < 0) ? 1 : 0;
+            auto put = newCube.begin();
+            *put++ = XYZ(p.x() + ax, p.y() + ay, p.z() + az);
+            XYZ shape(p.x() + ax, p.y() + ay, p.z() + az);
+            for (const auto &np : c) {
+                auto nx = np.x() + ax;
+                auto ny = np.y() + ay;
+                auto nz = np.z() + az;
+                if (nx > shape[0]) shape[0] = nx;
+                if (ny > shape[1]) shape[1] = ny;
+                if (nz > shape[2]) shape[2] = nz;
+                *put++ = XYZ(nx, ny, nz);
+            }
+            DEBUG_PRINTF("shape %2d %2d %2d\n\r", shape[0], shape[1], shape[2]);
+
+            // check rotations
+            XYZ lowestShape;
+            bool none_set = true;
+            for (int i = 0; i < 24; ++i) {
+                auto [res, ok] = Rotations::rotate(i, shape, newCube, rotatedCube);
+                if (!ok) continue;  // rotation generated violating shape
+
+                std::sort(rotatedCube.begin(), rotatedCube.end());
+
+                if (none_set || lowestHashCube < rotatedCube) {
+                    none_set = false;
+                    // std::printf("shape %2d %2d %2d\n\r", res.first.x(), res.first.y(), res.first.z());
+                    swap(lowestHashCube, rotatedCube);
+                    lowestShape = res;
+                }
+            }
+            hashes.insert(lowestHashCube, lowestShape);
+            DEBUG_PRINTF("inserted! (num %2lu)\n\n\r", hashes.size());
+        }
+        DEBUG_PRINTF("new hashes: %lu\n\r", hashes.size());
     }
 };
 
@@ -148,7 +139,7 @@ struct Worker {
             for (auto &c : subset) {
                 // std::printf("%p\n", (void *)&c);
                 // c.print();
-                expand(c, ws.hashes, ws.shape, ws.expandDim, ws.abssum);
+                ws.expand(c);
             }
             subset = ws.getPart();
         }
