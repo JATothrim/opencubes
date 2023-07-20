@@ -35,20 +35,38 @@ using XYZSet = std::unordered_set<XYZ, HashXYZ, std::equal_to<XYZ>>;
 
 struct Cube {
    private:
+    // proof-of-concept:
+    // pointer-bit-hacking:
     struct {
-        uint8_t is_shared : 1;
-        uint8_t size : 7;  // MAX 127
+        uint64_t is_shared : 1;
+        uint64_t size : 7;   // MAX 127
+        uint64_t addr : 56;  // low 56-bits of memory address.
     } bits;
-    XYZ *array = nullptr;
+    XYZ *get() {
+        // pointer bit-hacking:
+        uint64_t addr = bits.addr;
+        return reinterpret_cast<XYZ *>(addr);
+    }
+    const XYZ *get() const {
+        // pointer bit-hacking:
+        uint64_t addr = bits.addr;
+        return reinterpret_cast<const XYZ *>(addr);
+    }
 
-    static_assert(sizeof(bits) == sizeof(uint8_t));
+    void put(XYZ *addr) {
+        uint64_t tmp = reinterpret_cast<uint64_t>((void *)addr);
+        tmp &= 0xffffffffffffff;
+        bits.addr = tmp;
+    }
+
+    static_assert(sizeof(bits) == sizeof(uint64_t));
 
    public:
     // Empty cube
-    Cube() : bits{0, 0} {}
+    Cube() : bits{0, 0, 0} {}
 
     // Cube with N capacity
-    explicit Cube(uint8_t N) : bits{0, N}, array(new XYZ[bits.size]) {}
+    explicit Cube(uint8_t N) : bits{0, N, 0} { put(new XYZ[bits.size]); }
 
     // Construct from pieces
     Cube(std::initializer_list<XYZ> il) : Cube(il.size()) { std::copy(il.begin(), il.end(), begin()); }
@@ -56,19 +74,18 @@ struct Cube {
     // Construct from external source.
     // Cube shares this the memory until modified.
     // Caller guarantees the memory given will live longer than *this
-    Cube(XYZ *start, uint8_t n) : bits{1, n}, array(start) {}
+    Cube(XYZ *start, uint8_t n) : bits{1, n, 0} { put(start); }
 
     // Copy ctor.
     Cube(const Cube &copy) : Cube(copy.size()) { std::copy(copy.begin(), copy.end(), begin()); }
 
     ~Cube() {
         if (!bits.is_shared) {
-            delete[] array;
+            delete[] get();
         }
     }
     friend void swap(Cube &a, Cube &b) {
         using std::swap;
-        swap(a.array, b.array);
         swap(a.bits, b.bits);
     }
 
@@ -90,14 +107,14 @@ struct Cube {
     XYZ *data() {
         if (bits.is_shared) {
             // lift to RAM: this should never happen really.
-            Cube tmp(array, bits.size);
+            Cube tmp(get(), bits.size);
             swap(*this, tmp);
             std::printf("Bad use of Cube\n");
         }
-        return array;
+        return get();
     }
 
-    const XYZ *data() const { return array; }
+    const XYZ *data() const { return get(); }
 
     XYZ *begin() { return data(); }
 
