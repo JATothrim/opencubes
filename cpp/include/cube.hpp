@@ -3,6 +3,7 @@
 #define OPENCUBES_CUBE_HPP
 
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <memory>
 #include <unordered_set>
@@ -10,21 +11,33 @@
 
 #include "utils.hpp"
 
-struct XYZ {
-    int8_t data[3];
-    explicit XYZ(int8_t a = 0, int8_t b = 0, int8_t c = 0) : data{a, b, c} {}
+class XYZ {
+    uint16_t data;
+
+   public:
+    explicit XYZ(int8_t a = 0, int8_t b = 0, int8_t c = 0) { xyz(a, b, c); }
+    explicit XYZ(int8_t *p) : data(0) { xyz(p[0], p[1], p[2]); }
+    XYZ(std::array<int8_t, 3> s) { xyz(s[0], s[1], s[2]); }
     constexpr bool operator==(const XYZ &b) const { return (uint32_t) * this == (uint32_t)b; }
     constexpr bool operator<(const XYZ &b) const { return (uint32_t) * this < (uint32_t)b; }
-    constexpr operator uint32_t() const { return ((uint8_t)data[0] << 16) | ((uint8_t)data[1] << 8) | ((uint8_t)data[2]); }
+    constexpr operator uint16_t() const { return data; }
 
-    constexpr int8_t &x() { return data[0]; }
-    constexpr int8_t &y() { return data[1]; }
-    constexpr int8_t &z() { return data[2]; }
-    constexpr int8_t x() const { return data[0]; }
-    constexpr int8_t y() const { return data[1]; }
-    constexpr int8_t z() const { return data[2]; }
-    constexpr int8_t &operator[](int offset) { return data[offset]; }
-    constexpr int8_t operator[](int offset) const { return data[offset]; }
+    constexpr std::array<int8_t, 3> g() const {
+        // with bit-packing no point extracting just one field.
+        return {int8_t(int8_t((data >> 10) & 0b11111) - 1), int8_t(int8_t((data >> 5) & 0b11111) - 1), int8_t(int8_t(data & 0b11111) - 1)};
+    }
+    void xyz(std::array<int8_t, 3> s) { xyz(s[0], s[1], s[2]); }
+    void xyz(int8_t a = 0, int8_t b = 0, int8_t c = 0) {
+        assert(a >= -1 && b >= -1 && c >= -1);
+        data = 0;
+        data |= ((a + 1) & 0b11111) << 10;
+        data |= ((b + 1) & 0b11111) << 5;
+        data |= ((c + 1) & 0b11111);
+    }
+    constexpr int8_t x() const { return g()[0]; }
+    constexpr int8_t y() const { return g()[1]; }
+    constexpr int8_t z() const { return g()[2]; }
+    constexpr int8_t operator[](int offset) const { return g()[offset]; }
 };
 
 struct HashXYZ {

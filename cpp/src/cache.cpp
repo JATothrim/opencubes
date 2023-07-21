@@ -71,7 +71,7 @@ void Cache::save(std::string path, Hashy &hashes, uint8_t n) {
                     ofs.write((const char *)c.data(), sizeof(XYZ) * c.size());
                 } else {
                     for (const auto &p : c) {
-                        ofs.write((const char *)p.data, XYZ_SIZE);
+                        ofs.write((const char *)p.g().data(), XYZ_SIZE);
                     }
                 }
             }
@@ -147,9 +147,7 @@ Hashy Cache::load(std::string path, uint32_t extractShape) {
                     }
                 }
 
-                next.data()[k].data[0] = buf[curr_offset - buf_offset + 0];
-                next.data()[k].data[1] = buf[curr_offset - buf_offset + 1];
-                next.data()[k].data[2] = buf[curr_offset - buf_offset + 2];
+                next.data()[k].xyz(buf[curr_offset - buf_offset + 0], buf[curr_offset - buf_offset + 1], buf[curr_offset - buf_offset + 2]);
             }
             cubes.insert(next, shape);
         }

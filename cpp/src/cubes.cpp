@@ -48,12 +48,15 @@ void expand(const Cube &c, Hashy &hashes) {
         *put++ = XYZ(p.x() + ax, p.y() + ay, p.z() + az);
         XYZ shape(p.x() + ax, p.y() + ay, p.z() + az);
         for (const auto &np : c) {
-            auto nx = np.x() + ax;
-            auto ny = np.y() + ay;
-            auto nz = np.z() + az;
-            if (nx > shape[0]) shape[0] = nx;
-            if (ny > shape[1]) shape[1] = ny;
-            if (nz > shape[2]) shape[2] = nz;
+            auto n = np.g();
+            auto nx = n[0] + ax;
+            auto ny = n[1] + ay;
+            auto nz = n[2] + az;
+            std::array<int8_t, 3> s = shape.g();
+            if (nx > s[0]) s[0] = nx;
+            if (ny > s[1]) s[1] = ny;
+            if (nz > s[2]) s[2] = nz;
+            shape.xyz(s);
             *put++ = XYZ(nx, ny, nz);
         }
         DEBUG_PRINTF("shape %2d %2d %2d\n\r", shape[0], shape[1], shape[2]);
