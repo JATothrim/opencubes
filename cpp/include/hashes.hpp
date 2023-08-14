@@ -2,7 +2,9 @@
 #ifndef OPENCUBES_HASHES_HPP
 #define OPENCUBES_HASHES_HPP
 #include <array>
+#include <cassert>
 #include <cstdio>
+#include <deque>
 #include <map>
 #include <shared_mutex>
 #include <unordered_set>
@@ -21,33 +23,130 @@ struct HashCube {
         }
         return seed;
     }
+    size_t operator()(const Cube *cube) const { return (*this)(*cube); }
 };
 
+struct CubePtrEqual {
+    bool operator()(const Cube *a, const Cube *b) const { return *a == *b; }
+};
+
+using CubePtrSet = std::unordered_set<const Cube *, HashCube, CubePtrEqual>;
 using CubeSet = std::unordered_set<Cube, HashCube, std::equal_to<Cube>>;
+
+// The main hashset stores *differences* to the base cube(s)
+// There are usually a lot less base cubes than their expansions
+// So this allows de-duplicating this data.
+// At worst there is 1:1 ratio of base cubes and their expansions.
+// todo: the Base cube should be pointing directly into the cache file...
+struct CubeDiff {
+    const Cube *base;
+    XYZ expand;
+
+    Cube flat() const {
+        // the base cube is in sorted order:
+        Cube tmp(base->size() + 1);
+        auto put = tmp.begin();
+        for (auto &c : *base) {
+            *put++ = c;
+        }
+        *put++ = expand;
+        return tmp;
+    }
+
+    // Assemble temporary canonical cube from base cube and expansion.
+    Cube canonical() const {
+        // the base cube is in sorted order:
+        Cube tmp(flat());
+        std::sort(tmp.begin(), tmp.end());
+        return tmp;
+    }
+
+    bool operator==(const CubeDiff &rhs) const {
+        // note: can use non-canonical compare:
+        auto self = flat();
+        auto other = rhs.flat();
+        if (self.size() != other.size()) return false;
+        return std::mismatch(self.begin(), self.end(), other.begin()).first == self.end();
+    }
+
+    size_t size() const { return base->size() + 1; };
+
+    void copyout(int num, XYZ *dest) const {
+        assert(num == (signed)size());
+        auto put = dest;
+        for (auto &c : *base) {
+            *put++ = c;
+        }
+        *put++ = expand;
+        std::sort(dest, put);
+    }
+};
+
+struct HashCubeDiff {
+    size_t operator()(const CubeDiff &cube) const { return HashCube()(cube.canonical()); }
+};
+using CubeDiffSet = std::unordered_set<CubeDiff, HashCubeDiff, std::equal_to<CubeDiff>>;
 
 struct Hashy {
     struct Subsubhashy {
-        CubeSet set;
+        CubeDiffSet diff_set;
+        CubePtrSet base_set;
+        std::deque<Cube> base_cubes;
         mutable std::shared_mutex set_mutex;
 
-        template <typename CubeT>
-        void insert(CubeT &&c) {
-            std::lock_guard lock(set_mutex);
-            set.emplace(std::forward<CubeT>(c));
-        }
-
-        bool contains(const Cube &c) const {
+        void insert(const Cube *base, XYZ diff) {
             std::shared_lock lock(set_mutex);
-            auto itr = set.find(c);
-            if(itr != set.end()) {
-				return true;
-			}
-            return false;
+            if (diff_set.count(CubeDiff{base, diff})) return;
+            lock.unlock();
+
+            std::lock_guard elock(set_mutex);
+            diff_set.emplace(CubeDiff{base, diff});
         }
 
+        // insert or find base cube
+        template <typename CubeT>
+        const Cube *insert_base(CubeT &&base) {
+            // Insert into base_set
+            // Problem: the base_set.emplace() invalidates references
+            // but we need the reference/pointer to be stable.
+            // Solution:
+            // Insert pointers instead and point into Cube
+            // in std::deque<Cube> that does have stable references.
+            // note: the data structure doesn't care what the memory address is:
+            // so we can still find "non-existing" memory addresses.
+            std::shared_lock lock(set_mutex);
+            auto bref = base_set.find(&base);
+            if (bref == base_set.end()) {
+                lock.unlock();
+                std::lock_guard elock(set_mutex);
+                auto base_ptr = &base_cubes.emplace_back(std::forward<CubeT>(base));
+                auto [bref, isnew] = base_set.emplace(base_ptr);
+                if (!isnew) {
+                    // revert.. somebody succeeded before us.
+                    base_cubes.pop_back();
+                }
+                return *bref;
+            } else {
+                return *bref;
+            }
+        }
+
+        void clear() {
+            diff_set.clear();
+            base_set.clear();
+            diff_set.reserve(1);
+            base_set.reserve(1);
+            base_cubes.clear();
+            base_cubes.shrink_to_fit();
+        }
+
+        auto base_size() const {
+            std::shared_lock lock(set_mutex);
+            return base_set.size();
+        }
         auto size() const {
             std::shared_lock lock(set_mutex);
-            return set.size();
+            return diff_set.size();
         }
     };
     template <int NUM>
@@ -55,12 +154,25 @@ struct Hashy {
         std::array<Subsubhashy, NUM> byhash;
 
         template <typename CubeT>
-        void insert(CubeT &&c) {
+        void insert(CubeT &&base, XYZ diff) {
             HashCube hash;
-            auto idx = hash(c) % NUM;
+            auto idx = hash(base) % NUM;
             auto &set = byhash[idx];
-            if (!set.contains(c)) set.insert(std::forward<CubeT>(c));
+
+            // de-duplicate base cube:
+            const Cube *pbase = set.insert_base(std::forward<CubeT>(base));
+
+            set.insert(pbase, diff);
             // printf("new size %ld\n\r", byshape[shape].size());
+        }
+
+        auto base_size() const {
+            size_t sum = 0;
+            for (auto &set : byhash) {
+                auto part = set.base_size();
+                sum += part;
+            }
+            return sum;
         }
 
         auto size() const {
@@ -94,9 +206,18 @@ struct Hashy {
     }
 
     template <typename CubeT>
-    void insert(CubeT &&c, XYZ shape) {
+    void insert(CubeT &&base, XYZ diff, XYZ shape) {
         auto &set = byshape[shape];
-        set.insert(std::forward<CubeT>(c));
+        set.insert(std::forward<CubeT>(base), diff);
+    }
+
+    auto base_size() const {
+        size_t sum = 0;
+        for (auto &set : byshape) {
+            auto part = set.second.base_size();
+            sum += part;
+        }
+        return sum;
     }
 
     auto size() const {

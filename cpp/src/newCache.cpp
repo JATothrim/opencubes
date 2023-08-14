@@ -201,7 +201,7 @@ void CacheWriter::save(std::string path, Hashy &hashes, uint8_t n) {
     auto xyz = std::make_shared<array_region<XYZ>>(file_, (*shapeEntry)[0].offset, num_cubes * n);
     auto put = xyz->get();
 
-    auto copyrange = [n](CubeSet::iterator itr, CubeSet::iterator end, XYZ *dest) -> void {
+    auto copyrange = [n](CubeDiffSet::iterator itr, CubeDiffSet::iterator end, XYZ *dest) -> void {
         while (itr != end) {
             static_assert(sizeof(XYZ) == XYZ_SIZE);
             assert(itr->size() == n);
@@ -214,9 +214,9 @@ void CacheWriter::save(std::string path, Hashy &hashes, uint8_t n) {
     auto time_start = std::chrono::steady_clock::now();
     for (auto &key : keys) {
         for (auto &subset : hashes.byshape[key].byhash) {
-            auto itr = subset.set.begin();
+            auto itr = subset.diff_set.begin();
 
-            ptrdiff_t dist = subset.set.size();
+            ptrdiff_t dist = subset.diff_set.size();
             // distribute if range is large enough.
             auto skip = std::max(4096L, std::max(1L, dist / (signed)m_flushers.size()));
             while (dist > skip) {
@@ -226,7 +226,7 @@ void CacheWriter::save(std::string path, Hashy &hashes, uint8_t n) {
                 auto inc = std::min(dist, skip);
                 std::advance(itr, inc);
                 put += n * inc;
-                dist = std::distance(itr, subset.set.end());
+                dist = std::distance(itr, subset.diff_set.end());
 
                 auto done = 100.0f * (std::distance(xyz->get(), put) / float(num_cubes * n));
                 std::printf("writing data %5.2f%% ...  \r", done);
@@ -240,7 +240,7 @@ void CacheWriter::save(std::string path, Hashy &hashes, uint8_t n) {
             // copy remainder, if any.
             if (dist) {
                 std::lock_guard lock(m_mtx);
-                m_copy.emplace_back(std::bind(copyrange, itr, subset.set.end(), put));
+                m_copy.emplace_back(std::bind(copyrange, itr, subset.diff_set.end(), put));
                 ++m_num_copys;
                 m_run.notify_all();
                 put += n * dist;

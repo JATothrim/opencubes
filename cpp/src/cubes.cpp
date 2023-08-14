@@ -28,6 +28,7 @@ struct Workset {
     Hashy &hashes;
     XYZ targetShape, shape, expandDim;
     bool notSameShape;
+
     Workset(Hashy &hashes, XYZ targetShape, XYZ shape, XYZ expandDim, bool notSameShape)
         : hashes(hashes)
         , targetShape(targetShape)
@@ -95,6 +96,8 @@ struct Workset {
 
         DEBUG1_PRINTF("candidates: %lu\n\r", candidates.size());
 
+        //assert(std::is_sorted(c.begin(), c.end()));
+
         Cube newCube(c.size() + 1);
         Cube lowestHashCube(newCube.size());
         Cube rotatedCube(newCube.size());
@@ -131,7 +134,35 @@ struct Workset {
                     lowestShape = res;
                 }
             }
-            hashes.insert(lowestHashCube, lowestShape);
+
+            // separate an base cube from the rotated expansion.
+            // todo: ideally we want to use the Cube c that points
+            // directly into the cache file as base cube.
+            // this would avoid pulling this data into RAM
+            // *and* the base cubes would remain de-duplicated...
+
+            // get Cube N-1 that has lowest hash code or first that exists already.
+            Cube lowestDiff(lowestHashCube.size()-1);
+            Cube omit(lowestDiff.size());
+            XYZ lowestOmit;
+            none_set = true;
+            for (size_t i = 0; i < lowestHashCube.size(); ++i) {
+
+                // copy all but i'th element:
+                auto end = std::copy(lowestHashCube.begin(), lowestHashCube.begin() + i, omit.begin());
+                if(i < lowestHashCube.size() - 1){
+                    std::copy(lowestHashCube.begin() + i + 1,lowestHashCube.end(), end);
+                }
+
+                if (none_set || lowestDiff < omit) {
+                    none_set = false;
+                    swap(lowestDiff, omit);
+                    lowestOmit = lowestHashCube.data()[i];
+                }
+            }
+            DEBUG1_PRINTF("lowest N-1 hash: %zu \n\r", HashCube()(lowestDiff));
+
+            hashes.insert(lowestDiff, lowestOmit, lowestShape);
         }
     }
 };
@@ -212,7 +243,7 @@ FlatCache gen(int n, int threads, bool use_cache, bool write_cache, bool split_c
         return {};
     else if (n == 1) {
         hashes.init(n);
-        hashes.insert(Cube{{XYZ(0, 0, 0)}}, XYZ(0, 0, 0));
+        hashes.insert(Cube(), XYZ(0, 0, 0), XYZ(0, 0, 0));
         std::printf("%ld elements for %d\n\r", hashes.size(), n);
         if (write_cache) {
             CacheWriter cw(1);
@@ -305,8 +336,10 @@ FlatCache gen(int n, int threads, bool use_cache, bool write_cache, bool split_c
         for (auto& thr : workers) {
             thr.sync();
         }
-        std::printf("  num: %lu\n\r", hashes.byshape[targetShape].size());
-        totalSum += hashes.byshape[targetShape].size();
+        auto count = hashes.byshape[targetShape].size();
+        std::printf("  base-num: %lu\n\r", hashes.byshape[targetShape].base_size());
+        std::printf("  num:      %lu\n\r", count);
+        totalSum += count;
         if (write_cache && split_cache) {
             cw.save(base_path + "cubes_" + std::to_string(n) + "_" + std::to_string(targetShape.x()) + "-" + std::to_string(targetShape.y()) + "-" +
                             std::to_string(targetShape.z()) + ".bin",
@@ -314,8 +347,7 @@ FlatCache gen(int n, int threads, bool use_cache, bool write_cache, bool split_c
         }
         if (split_cache) {
             for (auto &subset : hashes.byshape[targetShape].byhash) {
-                subset.set.clear();
-                subset.set.reserve(1);
+                subset.clear();
             }
         }
     }
